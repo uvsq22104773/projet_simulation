@@ -28,7 +28,6 @@ def simulation_serveur(C, lambd, nb_requetes_max):
         6: 14/20
     }
 
-
     evenements = []
     temps_courant = 0
     nb_requetes_traite_bloque = 0
@@ -50,7 +49,7 @@ def simulation_serveur(C, lambd, nb_requetes_max):
             # Ajouter dans file routeur
             if len(file_routeur) < 100:
                 file_routeur.append((categorie, temps_arrivee))
-                # Planifier FIN_TRAITEMENT_ROUTEUR si nécessaire
+                # Planifier FIN_TRAITEMENT_ROUTEUR si la file était vide
                 if len(file_routeur) == 1:
                     heapq.heappush(evenements, (temps_courant + temps_traitement_routeur, 'FIN_TRAITEMENT_ROUTEUR', file_routeur[0]))
             else:
@@ -80,7 +79,7 @@ def simulation_serveur(C, lambd, nb_requetes_max):
                 # Planifier FIN_TRAITEMENT_SERVEUR
                 temps_traitement_serveur = random.expovariate(parametres_serveur[C])
                 heapq.heappush(evenements, (temps_courant + temps_traitement_serveur, 'FIN_TRAITEMENT_SERVEUR', (categorie, temps_arrivee, serveur_libre)))
-                # Planifier FIN_TRAITEMENT_ROUTEUR pour la prochaine requête
+                # Planifier potentiellement FIN_TRAITEMENT_ROUTEUR pour la prochaine requête si requête dans la file
                 if file_routeur:
                     heapq.heappush(evenements, (temps_courant + temps_traitement_routeur, 'FIN_TRAITEMENT_ROUTEUR', file_routeur[0]))
             else:
@@ -111,16 +110,73 @@ def simulation_serveur(C, lambd, nb_requetes_max):
 
     return nbr_requetes, taux_perte, ls_temps_requetes
 
+
+def optimal_C_lambda(nbr_requetes, lambd = 1, ls_C = [1, 2, 3, 6]):
+    """
+    Fonction pour trouver le C optimal pour un lambda donnée
+    """
+    res = []
+
+    for C in ls_C:
+        _, taux_perte, ls_temps_requetes = simulation_serveur(C, lambd, nbr_requetes)
+        if ls_temps_requetes:
+            temps_moyenne = np.mean(ls_temps_requetes)
+            std = np.std(ls_temps_requetes, ddof=1)
+            intervalle = 1.96 * (std / np.sqrt(len(ls_temps_requetes)))
+        else:
+            temps_moyenne = 0
+            intervalle = 0
+        taux_perte = (taux_perte / nbr_requetes) * 100
+        res.append([C, temps_moyenne, (temps_moyenne - intervalle, temps_moyenne + intervalle), taux_perte])
+
+    min = res[0][1]
+    min_i = 0
+    for i in range(1, len(res)):
+        if res[i][1] < min:
+            min = res[i][1]
+            min_i = i
+
+    potentiel_i = []
+    potentiel_i.append(min_i)
+    for i in range(len(res)):
+        if i != min_i:
+            if res[i][3] < 5:
+                if not (res[min_i][2][1] < res[i][2][0] or res[i][2][1] < res[min_i][2][0]):
+                    potentiel_i.append(i)
+            else:
+                res[i].append("perte")
+    
+    if len(potentiel_i) == 1:
+        res[min_i].append("valide")
+        for i in range(len(res)):
+            if i != min_i and len(res[i]) < 5:
+                res[i].append("mauvais")
+    else:
+        for i in range(len(res)):
+            if i in potentiel_i:
+                res[i].append("potentiel")
+            elif len(res[i]) < 5:
+                res[i].append("mauvais")
+    return res
+
+
 def graphique_temps_reponse(nbr_requetes, ls_C = [1, 2, 3, 6], lambdas = [0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0]):
     """
     Fonction pour tracer le temps de réponse moyen en fonction de λ
     avec intervalles de confiance à 95%.
     """
+    total = len(lambdas)
+
     for C in ls_C:
-        temps_reponses = []  # On réinitialise ici pour CHAQUE courbe C
+        i = 0
+        temps_reponses = []  # On réinitialise ici pour chaque courbe C
         intervalles = []     # Liste pour les intervalles de confiance
 
+        # Affichage progression
+        print(f"C = {C} : 0.0% terminé", end="\r")
+
         for lambd in lambdas:
+            i += 1
             _, _, ls_temps_requetes = simulation_serveur(C, lambd, nbr_requetes)
             if ls_temps_requetes:
                 moyenne = np.mean(ls_temps_requetes)
@@ -132,10 +188,16 @@ def graphique_temps_reponse(nbr_requetes, ls_C = [1, 2, 3, 6], lambdas = [0.2, 0
             temps_reponses.append(moyenne)
             intervalles.append(intervalle)
 
-        # Tracé avec barres d'erreur
+            # Affichage progression
+            pourcentage = (i / total) * 100
+            print(f"C = {C} : {pourcentage:.1f}% terminé", end="\r")
+
+        print()
+
+        # Intervalles de confiance
         plt.errorbar(lambdas, temps_reponses, yerr=intervalles, fmt='o-', capsize=5, label='C = ' + str(C))
 
-    # Décorations
+    # Légendes graphique
     plt.title("Temps de réponse moyen en fonction de λ avec intervalle 95%")
     plt.xlabel("λ (Taux d'arrivée)")
     plt.ylabel("Temps de réponse moyen")
@@ -144,26 +206,91 @@ def graphique_temps_reponse(nbr_requetes, ls_C = [1, 2, 3, 6], lambdas = [0.2, 0
 
     plt.show()
 
+
+def graphique_temps_reponse_precis(nbr_requetes, ls_C = [1, 2, 3, 6], lambd_min = 1, lambd_max = 5, precision = 20):
+    """
+    Fonction pour tracer le temps de réponse moyen en fonction de λ, 
+    sur l’intervalle [lambda_min, lambda_max], avec une précision donnée.
+    """
+    if lambd_min > lambd_max:
+        tmp = lambd_max
+        lambd_max = lambd_min
+        lambd_min = tmp
+    for C in ls_C:
+        temps_reponses = []  # On réinitialise ici pour chaque courbe C
+        intervalles = []     # Liste pour les intervalles de confiance
+        lambdas = []
+        total = (lambd_max-lambd_min) * precision
+
+        # Affichage progression
+        print(f"C = {C} : 0.0% terminé", end="\r")
+
+        for i in range(1, total + 1):
+            lambd = (i / precision) + lambd_min
+            lambdas.append(lambd)
+            _, _, ls_temps_requetes = simulation_serveur(C, lambd, nbr_requetes)
+            if ls_temps_requetes:
+                moyenne = np.mean(ls_temps_requetes)
+                std = np.std(ls_temps_requetes, ddof=1)
+                intervalle = 1.96 * (std / np.sqrt(len(ls_temps_requetes)))
+            else:
+                moyenne = 0
+                intervalle = 0
+            temps_reponses.append(moyenne)
+            intervalles.append(intervalle)
+
+            # Affichage progression
+            pourcentage = (i / total) * 100
+            print(f"C = {C} : {pourcentage:.1f}% terminé", end="\r")
+
+        print()
+
+        # Tracé de la courbe
+        plt.plot(lambdas, temps_reponses, label='C = ' + str(C))
+
+
+    # Légendes graphique
+    plt.title("Temps de réponse moyen en fonction de λ avec intervalle 95%")
+    plt.xlabel("λ (Taux d'arrivée)")
+    plt.ylabel("Temps de réponse moyen")
+    plt.legend()
+    plt.grid(True)
+
+    plt.show()
+
+
 def graphique_taux_perte(nbr_requetes, ls_C = [1, 2, 3, 6], lambdas = [0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0]):
     """
     Fonction pour tracer le taux de perte en fonction de λ
     avec intervalles de confiance à 95%.
     """
+    total = len(lambdas)
 
     for C in ls_C:
-        taux_pertes = []  # On réinitialise ici pour CHAQUE courbe C
+        i = 0
+        taux_pertes = []  # On réinitialise ici pour chaque courbe C
         intervalles = []  # Liste pour les intervalles de confiance
 
-        for lambd in lambdas:
-            _, taux_perte, _ = simulation_serveur(C, lambd, nbr_requetes)
-            taux_pertes.append(100 * (taux_perte / nbr_requetes)) # Convertir en pourcentage
-            intervalle = (1.96 * np.sqrt((taux_perte / nbr_requetes) * (1 - taux_perte / nbr_requetes) / nbr_requetes))
-            intervalles.append(intervalle * 100)  # Convertir en pourcentage
+        # Affichage progression
+        print(f"C = {C} : 0.0% terminé", end="\r")
 
-        # Tracé avec barres d'erreur
+        for lambd in lambdas:
+            i += 1
+            _, taux_perte, _ = simulation_serveur(C, lambd, nbr_requetes)
+            taux_pertes.append(100 * (taux_perte / nbr_requetes)) # x100 pour convertir en pourcentage
+            intervalle = (1.96 * np.sqrt((taux_perte / nbr_requetes) * (1 - taux_perte / nbr_requetes) / nbr_requetes))
+            intervalles.append(intervalle * 100)  # x100 pour convertir en pourcentage
+
+            # Affichage progression
+            pourcentage = (i / total) * 100
+            print(f"C = {C} : {pourcentage:.1f}% terminé", end="\r")
+
+        print()
+
+        # Intervalles de confiance
         plt.errorbar(lambdas, taux_pertes, yerr=intervalles, fmt='o-', capsize=5, label='C = ' + str(C))
 
-    # Décorations
+    # Légendes graphique
     plt.title("Taux de perte (%) en fonction de λ avec intervalle 95%")
     plt.xlabel("λ (Taux d'arrivée)")
     plt.ylabel("Taux de perte (%)")
@@ -172,16 +299,28 @@ def graphique_taux_perte(nbr_requetes, ls_C = [1, 2, 3, 6], lambdas = [0.2, 0.4,
 
     plt.show()
 
-def graphique_taux_perte_precis(nbr_requetes, lambd_max = 5, ls_C = [1, 2, 3, 6]):
+
+def graphique_taux_perte_precis(nbr_requetes, ls_C = [1, 2, 3, 6], lambd_min = 1, lambd_max = 5, precision = 20):
+    """
+    Fonction pour tracer le taux de perte en fonction de λ, 
+    sur l’intervalle [lambda_min, lambda_max], avec une précision donnée.
+    """
+    if lambd_min > lambd_max:
+        tmp = lambd_max
+        lambd_max = lambd_min
+        lambd_min = tmp
     for C in ls_C:
         taux_pertes = []
         lambdas = []
-        total = lambd_max * 100
+        total = (lambd_max-lambd_min) * precision
         seuil_5 = 5
         lambda_au_seuil = None
 
+        # Affichage progression
+        print(f"C = {C} : 0.0% terminé", end="\r")
+
         for i in range(1, total + 1):
-            lambd = i / 100
+            lambd = (i / precision) + lambd_min
             lambdas.append(lambd)
             _, taux_perte, _ = simulation_serveur(C, lambd, nbr_requetes)
             perte_pct = 100 * (taux_perte / nbr_requetes)
@@ -189,6 +328,7 @@ def graphique_taux_perte_precis(nbr_requetes, lambd_max = 5, ls_C = [1, 2, 3, 6]
 
             if lambda_au_seuil is None and perte_pct >= seuil_5:
                 lambda_au_seuil = lambd  # Retenir le premier lambda dépassant 5 %
+
 
             # Affichage progression
             pourcentage = (i / total) * 100
@@ -211,7 +351,7 @@ def graphique_taux_perte_precis(nbr_requetes, lambd_max = 5, ls_C = [1, 2, 3, 6]
     # Ligne horizontale à 5 %
     plt.axhline(y=5, color='red', linestyle='--', label='Seuil 5 %')
 
-    # Décorations
+    # Légendes graphique
     plt.title("Taux de perte (%) en fonction de λ")
     plt.xlabel("λ (Taux d'arrivée)")
     plt.ylabel("Taux de perte (%)")
@@ -219,65 +359,90 @@ def graphique_taux_perte_precis(nbr_requetes, lambd_max = 5, ls_C = [1, 2, 3, 6]
     plt.grid(True)
     plt.show()
 
-def taux_perte_precis(nbr_requetes, nbr_test, ls_C = [1, 2, 3, 6], lambdas = [0.2, 0.4, 0.6, 0.8]):
-    taille = len(ls_C)
-    if taille != len(lambdas):
-        raise ValueError("Les deux listes n'ont pas la même taille.")
-    print(f"Taille de la simulation : {nbr_requetes}.")
-    print(f"Moyenne sur {nbr_test} simulation.\n")
-    for i in range(taille):
-        pertes = 0
-        C = ls_C[i]
-        lambd = lambdas[i]
-        print(f"C = {C}, lambda = {lambd}:")
-        for j in range(nbr_test):
 
-            _, taux_perte, _ = simulation_serveur(C, lambd, nbr_requetes)
-            taux_perte_pct = 100 * (taux_perte / nbr_requetes)
-            intervalle = 1.96 * np.sqrt((taux_perte / nbr_requetes) * (1 - taux_perte / nbr_requetes) / nbr_requetes) * 100
-            pertes += taux_perte_pct
-            if j < 10:
-                print(f"    • {taux_perte_pct}%")
-            elif j == 10:
-                print("    • …")
-        print(f"Moyenne de {pertes/nbr_test}%.\n")
+def optimal_C_intervalle_lambdas(nbr_requetes, ls_C, lambd_min = 1, lambd_max = 5, precision = 20):
+    """
+    Fonction qui cherche et affiche dans un tableau le meilleur C pour des valeurs de λ,
+    sur l'intervalle [lambda_min, lambda_max], avec une précision donnée,
+    en utilisant la fonction `optimal_C_lambda`.
+    """
+    if lambd_min > lambd_max:
+        tmp = lambd_max
+        lambd_max = lambd_min
+        lambd_min = tmp
 
-def trouver_lambda(nbr_requetes, ls_C = [1, 2, 3, 6]):
-    lambd = 1.25
-    lambdas = []
-    pourcent_perte = 100
-    for C in ls_C:
-        while True:
-            lambd = lambd * 0.8
-            _, taux_perte, _ = simulation_serveur(C, lambd, nbr_requetes)
-            pourcent_perte = 100 * (taux_perte / nbr_requetes)
-            if pourcent_perte < 5:
-                p = 0
-                for _ in range(100):
-                    _, taux_perte, _ = simulation_serveur(C, lambd, nbr_requetes)
-                    p += taux_perte
-                if p/100 < 5:
-                    break
-        lambdas.append(lambd)
-        lambd = 1.25
-        pourcent_perte = 100
-    return lambdas
+    total = (lambd_max-lambd_min) * precision
+    lambda_sym = '\u03BB'
+    print("|" + "-" * 116 + "|")
+    print(f"|{lambda_sym:<20}| {'Meilleur(s) C':<20}| {'IC 95%':<50}| {'Taux de perte':<20}|")
+    print("|" + "-" * 116 + "|")
 
-lambdas = [0.2, 0.4, 0.6, 0.8, 1, 1.2, 1.4, 1.6, 1.8, 2]
-# lambdas = [0.64, 1.25]
+    for i in range(1, total + 1):
+        lambd = (i / precision) + lambd_min
+        res = optimal_C_lambda(nbr_requetes, lambd, ls_C)
+        IC_str = ""
+        perte_str = ""
+        C_str = ""
+        for C, TRM, IC, perte, eval in res:
+            if eval == "valide" or eval =="potentiel":
+                tmp_str = ", ".join(f"{elem:.3f}" for elem in IC)
+                if IC_str != "":
+                    IC_str = IC_str + ", "
+                IC_str = IC_str + f"[{tmp_str}]"
+                if perte_str != "":
+                    perte_str = perte_str + ", "
+                perte_str = perte_str + f"{perte:.2f}%"
+                if C_str != "":
+                    C_str = C_str + ", "
+                C_str = C_str + str(C)
 
-# sur moyenne de 10 simulations avec lambda baisser à 0.8 pour précision approxiamtif
-##lambdas = [0.40960000000000013, 1.2259964326927154e-06, 2.394524282602959e-06, 4.017345110647491e-07]
-# sur moyenne de 100 simulations avec lambda baisser à 0.8
-# lambdas = [0.32768000000000014, 2.5711008708143947e-07, 3.213876088517993e-07, 6.277101735386704e-07]
+        print(f"|{lambd:<20}| {C_str:<20}| {IC_str:<50}| {perte_str:<20}|")
+    print("|" + "-" * 116 + "|")
+
+
+def affiche_tableau(data):
+    """
+    Fonction qui affiche le tableau des résultats pour déterminer le 
+    meilleur C pour un λ donné, en utilisant les résultats de sortie 
+    de la fonction `optimal_C_lambda`.
+    """
+    print("|" + "-" * 86 + "|")
+    print(f"|{'C':<5}| {'TRM moyen':<12}| {'IC 95%':<25}| {'Taux de perte':<15}| {'Évaluation':<20} |")
+    print("|" + "-" * 86 + "|")
+    for C, TRM, IC, perte, eval in data:
+        if eval == "mauvais":
+            eval_str = "\u274C Rejeté"
+        elif eval == "valide":
+            eval_str = "\u2705 Optimal"
+        elif eval == "perte":
+            eval_str = "\u274C Perte > 5%"
+        else:
+            eval_str = "\U0001F536 Comparable"
+        IC_str = ", ".join(f"{elem:.6f}" for elem in IC)
+        IC_str = f"[{IC_str}]"
+        perte_str = f"{perte:.2f}%"
+        print(f"|{C:<5}| {TRM:<12.2f}| {IC_str:<25}| {perte_str:<15}| {eval_str:<20}|")
+    print("|" + "-" * 86 + "|")
+
+
+lambdas = [0.6, 0.7, 0.8, 0.9, 1, 1.1, 1.2, 1.3, 1.4, 1.5, 
+           1.6, 1.7, 1.8, 1.9, 2, 2.1, 2.2, 2.3, 2.4, 2.5, 
+           2.6, 2.7, 2.8, 2.9, 3, 3.1, 3.2, 3.3, 3.4, 3.5]
 
 ls_C = [1, 2, 3, 6]
 
-# R = lambdas
-#R = trouver_lambda(100000)
-# print(R)
-
+### Question 1
 # graphique_temps_reponse(100000, ls_C, lambdas)
+## Plus fin mais sans les intervalles
+# graphique_temps_reponse_precis(100000, ls_C, 1, 5, 100)
+
+### Question 2
 # graphique_taux_perte(100000, ls_C, lambdas)
-graphique_taux_perte_precis(100000, 3)
-# taux_perte_precis(100000, 10, ls_C, R)
+## Plus fin mais sans les intervalles
+# graphique_taux_perte_precis(100000, ls_C, 1, 5, 20)
+
+### Question 3
+# affiche_tableau(optimal_C_lambda(100000, 1))
+
+### Question 4
+optimal_C_intervalle_lambdas(100000, ls_C, 0, 3, 10)
