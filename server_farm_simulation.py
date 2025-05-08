@@ -250,7 +250,7 @@ def graphique_temps_reponse_precis(nbr_requetes, ls_C = [1, 2, 3, 6], lambd_min 
 
 
     # Légendes graphique
-    plt.title("Temps de réponse moyen en fonction de λ avec intervalle 95%")
+    plt.title("Temps de réponse moyen en fonction de λ")
     plt.xlabel("λ (Taux d'arrivée)")
     plt.ylabel("Temps de réponse moyen")
     plt.legend()
@@ -289,6 +289,9 @@ def graphique_taux_perte(nbr_requetes, ls_C = [1, 2, 3, 6], lambdas = [0.2, 0.4,
 
         # Intervalles de confiance
         plt.errorbar(lambdas, taux_pertes, yerr=intervalles, fmt='o-', capsize=5, label='C = ' + str(C))
+
+    # Ligne horizontale à 5 %
+    plt.axhline(y=5, color='red', linestyle='--', label='Seuil 5 %')
 
     # Légendes graphique
     plt.title("Taux de perte (%) en fonction de λ avec intervalle 95%")
@@ -434,15 +437,15 @@ ls_C = [1, 2, 3, 6]
 ### Question 1
 # graphique_temps_reponse(100000, ls_C, lambdas)
 ## Plus fin mais sans les intervalles
-# graphique_temps_reponse_precis(100000, ls_C, 1, 5, 100)
+# graphique_temps_reponse_precis(100000, ls_C, 0, 5, 100)
 
 ### Question 2
 # graphique_taux_perte(100000, ls_C, lambdas)
 ## Plus fin mais sans les intervalles
-# graphique_taux_perte_precis(100000, ls_C, 1, 5, 20)
+# graphique_taux_perte_precis(100000, ls_C, 0, 5, 20)
 
 ### Question 3
-# affiche_tableau(optimal_C_lambda(100000, 1))
+affiche_tableau(optimal_C_lambda(100000, 1))
 
 ### Question 4
-optimal_C_intervalle_lambdas(100000, ls_C, 0, 3, 10)
+# optimal_C_intervalle_lambdas(100000, ls_C, 0, 3, 10)
